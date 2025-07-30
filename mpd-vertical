@@ -1,0 +1,139 @@
+import numpy as np
+import math
+
+def calcular_mpd_perfis_verticais(caminho_arquivo, arquivo_saida, raio, tolerancia):
+    """
+    Calcula o MPD com base em perfis verticais dentro de um quadrado inscrito
+    no círculo de análise. O número de perfis é determinado pela tolerância.
+
+    Argumentos:
+        caminho_arquivo (str): Caminho para o arquivo de dados de entrada.
+        arquivo_saida (str): Nome do arquivo de texto para salvar os resultados.
+        raio (float): Raio do círculo original que define a área.
+        tolerancia (float): Metade da largura de cada perfil vertical.
+
+    Retorna:
+        float: O valor final do MPD, ou None se ocorrer um erro.
+    """
+    try:
+        dados = np.loadtxt(caminho_arquivo, usecols=(0, 1, 2))
+        z, x, y = dados[:, 0], dados[:, 1], dados[:, 2]
+    except FileNotFoundError:
+        print(f"ERRO: O arquivo de entrada '{caminho_arquivo}' não foi encontrado.")
+        return None
+    
+    # --- 1. Definir a Área de Análise (Quadrado Inscrito) ---
+    centro_x_geral = (np.min(x) + np.max(x)) / 2
+    centro_y_geral = (np.min(y) + np.max(y)) / 2
+    
+    # O lado de um quadrado inscrito em um círculo de raio R é R * sqrt(2)
+    lado_quadrado = raio * math.sqrt(2)
+    meio_lado = lado_quadrado / 2
+    
+    xmin_q = centro_x_geral - meio_lado
+    xmax_q = centro_x_geral + meio_lado
+    ymin_q = centro_y_geral - meio_lado
+    ymax_q = centro_y_geral + meio_lado
+    
+    print("Definindo área de análise baseada no quadrado inscrito...")
+    print(f"Limites X do quadrado: ({xmin_q:.4f}, {xmax_q:.4f})")
+    print(f"Limites Y do quadrado: ({ymin_q:.4f}, {ymax_q:.4f})")
+
+    # Filtrar pontos que estão dentro do quadrado
+    indices_quadrado = np.where(
+        (x >= xmin_q) & (x <= xmax_q) &
+        (y >= ymin_q) & (y <= ymax_q)
+    )
+    dados_quadrado = dados[indices_quadrado]
+    
+    if dados_quadrado.shape[0] == 0:
+        print("Nenhum ponto de dados encontrado dentro da área do quadrado.")
+        return 0.0
+    
+    print(f"{dados_quadrado.shape[0]} pontos de dados dentro da área de análise.")
+
+    # --- 2. Determinar Posições e Número de Perfis Verticais ---
+    largura_perfil = 2 * tolerancia
+    n_perfis_vertical = int(math.floor(lado_quadrado / largura_perfil))
+    
+    if n_perfis_vertical == 0:
+        print("ERRO: A tolerância é muito grande para a área de análise. Nenhum perfil pode ser criado.")
+        return None
+        
+    print(f"Número de perfis verticais determinado automaticamente: {n_perfis_vertical}")
+    
+    # Calcula as posições centrais X de cada perfil
+    posicoes_x_perfis = np.linspace(
+        xmin_q + tolerancia, 
+        xmax_q - tolerancia, 
+        n_perfis_vertical
+    )
+
+    # --- 3. Processar cada perfil ---
+    lista_mpd_por_perfil = []
+    
+    with open(arquivo_saida, 'w') as f:
+        f.write("Perfil_N;Pico_1_detrend;Pico_2_detrend;Media_Z_detrend;MPD_Perfil\n")
+
+        for i, x_perfil in enumerate(posicoes_x_perfis):
+            # Selecionar pontos para o perfil atual (faixa vertical)
+            indices_perfil_atual = np.where(
+                np.abs(dados_quadrado[:, 1] - x_perfil) <= tolerancia
+            )
+            pontos_perfil = dados_quadrado[indices_perfil_atual]
+
+            if pontos_perfil.shape[0] < 2:
+                continue
+            
+            # Detrending ao longo do eixo Y
+            # Var dependente: Z, Var independente: Y
+            y_coords = pontos_perfil[:, 2]
+            z_coords = pontos_perfil[:, 0]
+            slope, intercept = np.polyfit(y_coords, z_coords, 1)
+            z_detrended = z_coords - (slope * y_coords + intercept)
+            
+            # Dividir o perfil em duas metades (superior e inferior)
+            metade_superior_z = z_detrended[y_coords >= centro_y_geral]
+            metade_inferior_z = z_detrended[y_coords < centro_y_geral]
+
+            if metade_superior_z.shape[0] > 0 and metade_inferior_z.shape[0] > 0:
+                p1 = np.max(metade_superior_z) # Pico da metade superior
+                p2 = np.max(metade_inferior_z) # Pico da metade inferior
+                
+                media_z_detrended = np.mean(z_detrended)
+                mpd_perfil = ((p1 + p2) / 2) - media_z_detrended
+                lista_mpd_por_perfil.append(mpd_perfil)
+                
+                f.write(f"{i+1};{p1:.6f};{p2:.6f};{media_z_detrended:.6f};{mpd_perfil:.6f}\n")
+
+        if not lista_mpd_por_perfil:
+            mpd_final = 0.0
+            print("\nAviso: Não foi possível calcular o MPD para nenhum perfil.")
+        else:
+            mpd_final = np.mean(lista_mpd_por_perfil)
+            
+        f.write(f"\nMPD Final (Perfis Verticais);{mpd_final:.6f}\n")
+    
+    print(f"\nArquivo de resultados '{arquivo_saida}' foi salvo.")
+    return mpd_final
+
+# --- Bloco Principal de Execução ---
+if __name__ == '__main__':
+    # --- Parâmetros ajustáveis ---
+    NOME_ARQUIVO_ENTRADA = 'cp0.xyz'
+    NOME_ARQUIVO_SAIDA = 'resultados_mpd_vertical.txt'
+    
+    RAIO = 40.0         # Raio do círculo original que define o tamanho do quadrado
+    TOLERANCIA = 0.1    # Define a LARGURA de cada perfil. Chave para determinar o N de perfis.
+
+    print("Iniciando cálculo de MPD com PERFIS VERTICAIS...")
+    print("-------------------------------------------------")
+    
+    mpd_resultado = calcular_mpd_perfis_verticais(
+        NOME_ARQUIVO_ENTRADA, NOME_ARQUIVO_SAIDA, RAIO, TOLERANCIA
+    )
+
+    if mpd_resultado is not None:
+        print("-------------------------------------------------")
+        print("\n--- RESULTADO ---")
+        print(f"O MPD final (Perfis Verticais) é: {mpd_resultado:.6f}")
